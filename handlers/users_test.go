@@ -1,10 +1,9 @@
-package main
+package handlers
 
 import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,21 +11,19 @@ import (
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/stretchr/testify/assert"
 )
 
 // TestCreateUser tests the user creation handler.
 func TestCreateUser(t *testing.T) {
 	// Set up a temporary database for testing
-	db, err := sql.Open("sqlite3", "test_data.db")
-	if err != nil {
-		t.Fatalf("Failed to connect to the database: %v", err)
+	db, dbErr := setupTestDatabase()
+	if dbErr != nil {
+		t.Fatalf("Failed to set up test database: %v", dbErr)
 	}
 	defer func() {
-		db.Close()
-		// Remove the temporary database after the test is done
-		if err := removeTempDatabase("test_data.db"); err != nil {
-			t.Fatalf("Failed to remove temporary database: %v", err)
+		dbErr = cleanupTestDatabase(db)
+		if dbErr != nil {
+			t.Fatalf("Failed to clean up test database: %v", dbErr)
 		}
 	}()
 
@@ -34,7 +31,9 @@ func TestCreateUser(t *testing.T) {
 	router := gin.Default()
 
 	// Set up the routes for testing
-	router.POST("/users", createUser)
+	router.POST("/users", func(c *gin.Context) {
+		CreateUser(c, db)
+	})
 
 	// Create a test user
 	user := User{Name: "Test User", Email: "test@example.com"}
@@ -49,21 +48,14 @@ func TestCreateUser(t *testing.T) {
 		t.Fatalf("Failed to create POST request: %v", err)
 	}
 
-	// Set the request content type
 	req.Header.Set("Content-Type", "application/json")
-
-	// Create a test HTTP recorder
 	recorder := httptest.NewRecorder()
-
-	// Serve the request to the router
 	router.ServeHTTP(recorder, req)
 
 	// Check the response status code
 	if recorder.Code != http.StatusCreated {
 		t.Errorf("Expected status code %d, but got %d", http.StatusCreated, recorder.Code)
 	}
-
-	fmt.Println(recorder.Body.String())
 
 	// Parse the response body and check the user data
 	var responseUser User
@@ -73,11 +65,40 @@ func TestCreateUser(t *testing.T) {
 	}
 
 	// Check the user data from the response
-	assert.Equal(t, user.Name, responseUser.Name)
-	assert.Equal(t, user.Email, responseUser.Email)
+	if responseUser.Name != user.Name || responseUser.Email != user.Email {
+		t.Errorf("Expected user data: %+v, but got: %+v", user, responseUser)
+	}
 }
 
-// removeTempDatabase removes the temporary database file after the test is done.
-func removeTempDatabase(dbPath string) error {
-	return os.Remove(dbPath)
+// setupTestDatabase sets up a temporary database for testing.
+func setupTestDatabase() (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", "test_data.db")
+	if err != nil {
+		return nil, err
+	}
+
+	// Create the "users" table if it doesn't exist
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			email TEXT NOT NULL
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
+	return db, nil
+}
+
+// cleanupTestDatabase removes the temporary database after the test is done.
+func cleanupTestDatabase(db *sql.DB) error {
+	err := db.Close()
+	if err != nil {
+		return err
+	}
+
+	// Remove the temporary database file after the test is done.
+	return os.Remove("test_data.db")
 }
